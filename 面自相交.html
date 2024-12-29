@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>绘制面自相交</title>
+</head>
+<style>
+    html,
+    body {
+      margin: 0px;
+      height: 100%;
+      width: 100%;
+      font-size:10px;
+    }
+    #map_wrapper {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      z-index:0
+    }
+
+</style>
+<link rel='stylesheet' href='https://maptalks.com/api/maptalks.css' />
+<script type='text/javascript' src='https://maptalks.com/api/maptalks.min.js'></script>
+<script type='text/javascript' src='https://maptalks.com/api/maptalks-gl-layers.js'></script>
+ <script src="https://cdn.jsdelivr.net/npm/@turf/turf/turf.min.js"></script>
+
+<body>
+    <div id="map_wrapper"></div>
+    <script type="module">
+        const map = new maptalks.Map("map_wrapper", {
+            center: [121.473667,31.230525],
+            zoom: 14,
+            baseLayer: new maptalks.TileLayer("base", {
+                urlTemplate: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+                subdomains: ["a", "b", "c", "d"],
+                attribution: "&copy; <a href='http://osm.org'>OpenStreetMap</a> contributors, &copy; <a href='https://carto.com/'>CARTO</a>",
+            })
+        });
+        let layer  = new maptalks.VectorLayer("polygonLayer").addTo(map)
+		const drawTool = new maptalks.DrawTool({
+			mode: 'Polygon',
+			once: false // 允许连续绘制
+		}).addTo(map);
+        
+		drawTool.on('drawvertex', (e) => {
+			// 获取当前绘制的坐标点序列
+			const points = e.geometry.getCoordinates()[0];
+            let coordinates = []; 
+            if(points.length>3){
+                // 使用 map 方法来转换为经纬度数组
+                coordinates = points.map(point => [point.x, point.y]);
+                coordinates.pop();
+                /**
+                 * @desciption 通过线空间交叉判断，这样就可以避免在绘制面的过程中
+                 * 绘制凹多边形就绘制不了的，这样就更加灵活
+                */
+                const front = coordinates.slice(0, -1); // 获取前面部分
+                const lastTwo = coordinates.slice(-2);  // 获取后两个元素
+                /**
+                 * @description 判断线段是否存在交叉，此处主要是两点线段和复杂折线空间相交的判断
+                 * 此处使用写的判断空间线段交叉方法
+                 * 为什么没有使用turf.booleanCrosses的方法，试了一下好像是有问题
+                */
+                let cross = doIntersectWithComplexLine(lastTwo,front)
+                console.log(cross);
+                if (cross) {
+                    // 回退到上一个点
+                    drawTool.undo();
+                    // 提示用户
+                    alert('绘制的面存在自相交，请重新选择点！');
+                };
+            };
+        });
+        drawTool.on('drawend', (e) => {
+            // 获取当前绘制的坐标点序列
+			const points = e.geometry.getCoordinates()[0];
+            if(points.length>3){
+                let coordinates = points.map(point => [point.x, point.y]);
+                const polygon = turf.polygon([coordinates]); // 包装成一个嵌套数组（Polygon）
+                var kinks = turf.kinks(polygon);
+                if (kinks.features.length>0) {
+                    // 提示用户
+                    alert('绘制的面存在自相交，请重新绘制！');
+                }else{
+                    layer.addGeometry(e.geometry);
+                }
+            }
+        });
+
+        // 计算叉积
+        function cross(o, a, b) {
+            return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+        };
+        // 判断点 p 是否在线段 ab 上，排除端点
+        function onSegment(a, b, p) {
+            return p[0] > Math.min(a[0], b[0]) && p[0] < Math.max(a[0], b[0]) &&
+                p[1] > Math.min(a[1], b[1]) && p[1] < Math.max(a[1], b[1]);
+        };
+        // 判断线段 ab 和 cd 是否相交，排除端点重合的情况
+        function doIntersect(a, b, c, d) {
+            let ab_cross_ac = cross(a, b, c);
+            let ab_cross_ad = cross(a, b, d);
+            let cd_cross_ca = cross(c, d, a);
+            let cd_cross_cb = cross(c, d, b);
+            // 判断是否相交，排除端点重合的情况
+            if (ab_cross_ac * ab_cross_ad < 0 && cd_cross_ca * cd_cross_cb < 0) {
+                return true;
+            };
+            // 处理共线的情况，排除端点
+            if (ab_cross_ac === 0 && onSegment(a, b, c)) return true;
+            if (ab_cross_ad === 0 && onSegment(a, b, d)) return true;
+            if (cd_cross_ca === 0 && onSegment(c, d, a)) return true;
+            if (cd_cross_cb === 0 && onSegment(c, d, b)) return true;
+            return false;
+        };
+        // 判断线段 line1 是否与 line2 中的任何一条线段交叉
+        function doIntersectWithComplexLine(line1, line2) {
+            const A = line1[0];
+            const B = line1[1];
+            // 遍历复杂折线 line2 中的每一条子线段
+            for (let i = 0; i < line2.length - 1; i++) {
+                const C = line2[i];
+                const D = line2[i + 1];
+                // 排除共享端点的情况
+                if (!(A[0] === C[0] && A[1] === C[1]) && !(A[0] === D[0] && A[1] === D[1]) &&
+                    !(B[0] === C[0] && B[1] === C[1]) && !(B[0] === D[0] && B[1] === D[1])) {
+                    if (doIntersect(A, B, C, D)) {
+                        return true; // 如果找到了交点，则返回 true
+                    }
+                }
+            }
+            return false; // 如果没有交点，则返回 false
+        };
+
+    </script>
+</body>
+</html>
